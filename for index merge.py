@@ -1,0 +1,42 @@
+import os
+import json
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+# ---------------- CONFIG ----------------
+METADATA_FILE = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_metadata.json"
+OUTPUT_INDEX = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_faiss.index"
+
+# ---------------- Load Model ----------------
+embedding_model = SentenceTransformer("all-mpnet-base-v2")
+
+# ---------------- Main ----------------
+def main():
+    if not os.path.exists(METADATA_FILE):
+        print(f"🚫 Metadata file not found: {METADATA_FILE}")
+        return
+
+    with open(METADATA_FILE, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    # Filter only entries with valid text
+    filtered_metadata = [m for m in metadata if m.get("combined_text", "").strip()]
+    if not filtered_metadata:
+        print("🚫 No valid entries with 'combined_text' found.")
+        return
+
+    print(f"✅ Found {len(filtered_metadata)} valid entries to embed.")
+
+    texts = [m["combined_text"] for m in filtered_metadata]
+    embeddings = embedding_model.encode(texts, convert_to_numpy=True).astype(np.float32)
+
+    print("📦 Building FAISS index...")
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings)
+    faiss.write_index(index, OUTPUT_INDEX)
+
+    print(f"✅ FAISS index saved to: {OUTPUT_INDEX}")
+
+if __name__ == "__main__":
+    main()
