@@ -1,0 +1,156 @@
+import streamlit as st
+import json
+import numpy as np
+import faiss
+import random
+from sentence_transformers import SentenceTransformer
+from urllib.parse import urlparse
+from huggingface_hub import InferenceClient
+
+# ---- Page Config ----
+st.set_page_config(page_title="LungScreenSDM", layout="centered")
+st.title("Lung Cancer Screening Assistant")
+st.markdown("Ask me anything about lung cancer screening. I’ll respond based on real research.")
+
+# ---- Hugging Face Token & Zephyr Client ----
+HF_TOKEN = "token"  # Replace with your token
+client = InferenceClient(model="HuggingFaceH4/zephyr-7b-beta", token=HF_TOKEN)
+
+# ---- Load Embedding Model ----
+embedding_model = SentenceTransformer("all-mpnet-base-v2")
+
+# ---- Load FAISS Index and Metadata ----
+@st.cache_resource
+def load_index():
+    with open("lung_metadata.json", "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    for article in metadata:
+        if article.get("journal", "Unknown") == "Unknown" and "url" in article:
+            domain = urlparse(article["url"]).netloc
+            if domain:
+                article["journal"] = domain.replace("www.", "")
+    index = faiss.read_index("lung_faiss.index")
+    return index, metadata
+
+index, metadata = load_index()
+
+# ---- Chat History ----
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# ---- Sidebar Filters ----
+st.sidebar.header("Filter Options")
+year_filter = st.sidebar.selectbox("Only show papers from:", ["All", "2020+", "2015+", "Before 2015"])
+journals = sorted(set(doc.get("journal", "Unknown") for doc in metadata))
+journal_filter = st.sidebar.selectbox("Filter by Journal:", ["All"] + journals)
+if st.sidebar.button("🪜 Clear History"):
+    st.session_state.chat_history = []
+
+# ---- Filter Function ----
+def apply_filter(metadata, year_filter, journal_filter):
+    def passes(doc):
+        try:
+            y = int(doc.get("year", 0))
+        except:
+            y = 0
+        j = doc.get("journal", "Unknown")
+        return (
+            (year_filter == "All" or (year_filter == "2020+" and y >= 2020)
+             or (year_filter == "2015+" and y >= 2015) or (year_filter == "Before 2015" and y < 2015)) and
+            (journal_filter == "All" or j == journal_filter)
+        )
+    return [doc for doc in metadata if passes(doc)]
+
+# ---- Answer Generation ----
+def generate_answer(full_query, top_docs, history, max_docs=3):
+    if not top_docs:
+        return "I'm sorry, I couldn't find relevant research articles to answer that question. Please try asking in a different way."
+
+    context = "\n\n".join([
+        f"Title: {doc['title']}\nJournal: {doc.get('journal')} ({doc.get('year')})\nAuthors: {', '.join(doc.get('authors', []))}"
+        for doc in top_docs[:max_docs]
+    ])
+
+    history_block = "\n".join([
+        f"User: {msg['user']}\nAssistant: {msg['bot']}"
+        for msg in history[-3:]
+    ])
+
+    prompt = (
+        "You are a compassionate, evidence-based AI assistant trained to support patients exploring lung cancer screening.\n"
+        "Use ONLY the research context provided below.\n"
+        "Do NOT make up information. Say 'not mentioned' if something is missing.\n\n"
+        "Structure your response like this:\n"
+        "1. Eligibility\n"
+        "2. Benefits\n"
+        "3. Risks or uncertainties\n"
+        "4. What to ask your doctor\n"
+        "5. Reassuring follow-up\n\n"
+        "Use clear, plain English. Keep it friendly, factual, and brief.\n\n"
+        f"📘 Research Context:\n{context}\n\n"
+        f"🗣️ Chat History:\n{history_block}\n"
+        f"👤 User: {full_query}\n🤖 Assistant:"
+    )
+
+    response = client.text_generation(prompt, max_new_tokens=500, temperature=0.7).strip()
+
+    if top_docs and top_docs[0].get("title"):
+        title = top_docs[0]["title"]
+        year = top_docs[0].get("year", "Unknown")
+        link = top_docs[0].get("url") or (f"https://doi.org/{top_docs[0]['doi']}" if top_docs[0].get("doi") else "#")
+        response += f"\n\n📖 *Based on: [{title}]({link}) ({year}).*"
+
+    response += "\n\n💬 Would you like help drafting a question for your doctor?"
+    return response
+
+# ---- Chat Display ----
+st.subheader("🗨️ Conversation History")
+for entry in st.session_state.chat_history:
+    st.markdown(f"**🧑 You:** {entry['user']}")
+    st.markdown(f"**🤖 Assistant:**")
+    for line in entry['bot'].split("\n"):
+        if line.strip():
+            st.markdown(line)
+    st.markdown("---")
+
+# ---- User Input ----
+st.subheader("💬 Ask About Lung Cancer Screening")
+user_input = st.chat_input("Type your question here:")
+
+if user_input:
+    query = user_input
+    filtered_metadata = apply_filter(metadata, year_filter, journal_filter)
+
+    if not filtered_metadata:
+        st.warning("No papers match your selected filters.")
+    else:
+        query_vec = embedding_model.encode([query]).astype(np.float32).reshape(1, -1)
+        D, I = index.search(query_vec, k=10)
+        top_results = [filtered_metadata[i] for i in I[0] if i < len(filtered_metadata)]
+
+        pmc_results = [doc for doc in top_results if "pmc" in doc.get("id", "").lower() or ("url" in doc and "pmc" in doc["url"].lower())]
+        web_results = [doc for doc in top_results if doc not in pmc_results]
+        random.shuffle(web_results)
+        top_docs = pmc_results[:2] + web_results[:2]
+
+        st.subheader("🔗 Top Articles")
+        for doc in top_docs:
+            title = doc.get("title")
+            link = doc.get("url", "#")
+            journal = doc.get("journal", "Unknown")
+            year = doc.get("year", "Unknown")
+            st.markdown(f"- [{title}]({link}) — *{journal}, {year}*")
+
+        if not top_docs:
+            st.error("No strong matches found in the knowledge base.")
+        else:
+            st.subheader("🤖 Assistant's Answer")
+            answer = generate_answer(query, top_docs, st.session_state.chat_history)
+            for line in answer.split("\n"):
+                if line.strip():
+                    st.markdown(line)
+            st.session_state.chat_history.append({"user": query, "bot": answer})
+
+# ---- Footer ----
+st.markdown("---")
+st.markdown("_Powered by FAISS vector search and Zephyr-7B LLM inference._")
