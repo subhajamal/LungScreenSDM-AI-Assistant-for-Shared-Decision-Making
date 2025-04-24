@@ -7,9 +7,9 @@ from sentence_transformers import SentenceTransformer
 from typing import List, Dict
 
 # ---------------- CONFIG ----------------
-XML_FOLDER = r"C:\Users\subha\Downloads\LungCancerChatbot\PMC_XML_Files"
-OUTPUT_INDEX = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_faiss.index"
-OUTPUT_META = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_metadata.json"
+XML_FOLDER = r"\PMC_XML_Files"
+OUTPUT_INDEX = r"\lung_faiss.index"
+OUTPUT_META = r"\\lung_metadata.json"
 
 # ---------------- Load Model ----------------
 embedding_model = SentenceTransformer("all-mpnet-base-v2")
