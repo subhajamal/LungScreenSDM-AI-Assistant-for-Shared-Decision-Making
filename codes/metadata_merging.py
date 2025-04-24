@@ -2,9 +2,9 @@ import json
 import shutil
 
 # Paths
-original_path = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_metadata.json"
-new_data_path = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_metadata_web_fetched.json"
-backup_path = r"C:\Users\subha\Downloads\LungCancerChatbot\lung_metadata_backup.json"
+original_path = r"C:\\lung_metadata.json"
+new_data_path = r"C:\metadata_web_fetched.json"
+backup_path = r"C:\\lung_metadata_backup.json"
 
 # Step 1: Load the original metadata
 with open(original_path, "r", encoding="utf-8") as f:
